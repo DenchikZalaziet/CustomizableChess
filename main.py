@@ -4,7 +4,10 @@ from menu import Menu
 def main() -> None:
     app = Menu()
     while True:
-        app.check_mode()
+        try:
+            app.check_mode()
+        except KeyboardInterrupt:
+            break
 
 
 if __name__ == "__main__":

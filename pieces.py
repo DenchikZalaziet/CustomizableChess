@@ -1,189 +1,301 @@
-def check_collision(board, x, y, target_x, target_y, rang=-1, can_jump=False) -> int:
-    # адекватно работает только для 8 направлений или со включенным прыжком
-    # 0 - нельзя, 1 - можно, 2 - фигура на целевой клетке
-    if rang != -1 and max(abs(target_x - x), abs(target_y - y)) > rang:
-        return 0
-
-    target_type = board[target_y][target_x].get_type()
-
-    if not can_jump:
-        while x != target_x or y != target_y:
-            if x < target_x:
-                x += 1
-            elif x > target_x:
-                x -= 1
-            if y < target_y:
-                y += 1
-            elif y > target_y:
-                y -= 1
-
-            if board[y][x].get_type() != 0 and (x != target_x or y != target_y):  # на текущей клете кто-то есть
-                return 0
-
-    if target_type == 0:  # на конечной клетке пусто
-        return 1
-    else:  # на конечной клетке кто-то есть
-        return 2
+import weakref
+from movement import *
 
 
 class Piece:
-    type = 0
-    can_jump = False  # с ходами не по основным 8 направлениям лучше включать на 1
-    can_eat_own = False
-    can_explode = False
-    rang = 0
+    all_instances = weakref.WeakSet()
+    type: str
+    piece_registry = {}
+    default_texture = 'NA'
+    texture_registry = {
+        'empty': {'w': "##", 'b': "  "},
+        'pawn': {'w': "Wp", 'b': "Bp"},
+        'rook': {'w': "Wr", 'b': "Br"},
+        'knight': {'w': "Wk", 'b': "Bk"},
+        'bishop': {'w': "Wb", 'b': "Bb"},
+        'queen': {'w': "Wq", 'b': "Bq"},
+        'king': {'w': "WK", 'b': "BK"},
+        'bomb': {'w': "Wmb", 'b': "Bmb"}
+    }
+    movement_registry = {
+        'empty': MovementType,
+        'pawn': PawnMovement,
+        'rook': RookMovement,
+        'knight': KnightMovement,
+        'bishop': BishopMovement,
+        'queen': QueenMovement,
+        'king': KingMovement,
+        'bomb': KingMovement
+    }
+    defaults = {
+        'color': 'n',
+        'range': 0,
+        'explosion_range': 0,
+        'can_jump':  False,
+        'can_eat_own':  False,
+        'can_explode':  False
+        }
 
-    def __init__(self, color) -> None:
-        self.color = color
+    def __init__(self, color: str) -> None:
+        self.overrides = {"color": color}
+        self.__class__.instances.add(self)
 
-    def set_range(self, change) -> None:
-        self.rang = change
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        cls.instances = (weakref.WeakSet())
+        parent_defaults = getattr(super(cls, cls), "defaults", {})
+        cls.defaults = {**parent_defaults, **getattr(cls, "defaults", {})}
+        if hasattr(cls, 'type'):
+            Piece.piece_registry[cls.type] = cls
+        else:
+            raise TypeError(f"У класса {cls.__name__} нет атрибута 'тип'")
 
-    def set_can_explode(self, new_value) -> None:
-        self.can_explode = new_value
+    def __setattr__(self, item: str, value):
+        if item == "movement_type":
+            value = Piece.movement_registry.get(value, None)
+            if value:
+                self.overrides["movement_type"] = value
+            else:
+                print("Нет заданного типа движения")
+                return
 
-    def get_color(self) -> int:
-        return self.color
+        elif item in self.defaults:
+            value = self.convert_to_type(item, value)
+            self.overrides[item] = value
 
-    def get_type(self) -> int:
-        return self.type
+        else:
+            super().__setattr__(item, value)
 
-    def get_jump(self) -> bool:
-        return self.can_jump
+    def __getattr__(self, item):
+        if item in self.defaults:
+            return self.overrides.get(item, self.defaults[item])
+        raise AttributeError(f"Атрибут {item} не существует")
 
-    def get_can_explode(self) -> bool:
-        return self.can_explode
+    @classmethod
+    def set_default(cls, name, value):
+        if name in cls.ults:
+            cls.defaults[name] = value
+            for instance in cls.instances:
+                if name not in instance.overrides:
+                    setattr(instance, name, value)
+        else:
+            raise AttributeError(f"Нет атрибута {name}")
 
-    def check_move(self, board, x, y, target_x, target_y) -> bool:
-        return False
+    @property
+    def color(self) -> str:
+        return self.overrides.get("color", self.defaults["color"])
+
+    @color.setter
+    def color(self, value: str) -> None:
+        value = value.lower().strip()
+        if value in ["b", "black", "0"]:
+            value = "b"
+        elif value in ["w", "white", "1"]:
+            value = "w"
+        elif value in ["n", "none"]:
+            value = "n"
+
+        if value in ["b", "w", "n"]:
+            self.overrides["color"] = value
+        else:
+            print(f"Не существует цвет {value}")
+
+    @property
+    def texture(self) -> str:
+        if self.color in ['b', 'w']:
+            return self.overrides.get("texture", self.texture_registry[self.type][self.color])
+        elif self.color == 'n':
+            return self.overrides.get("texture", self.default_texture)
+
+    @texture.setter
+    def texture(self, value: str) -> None:
+        self.overrides["texture"] = value
+
+    @property
+    def range(self):
+        return self.overrides.get('range', self.defaults['range'])
+
+    @range.setter
+    def range(self, value):
+        self.overrides['range'] = max(value, -1)
+
+    @property
+    def explosion_range(self):
+        return self.overrides.get('explosion_range', self.defaults['explosion_range'])
+
+    @explosion_range.setter
+    def explosion_range(self, value):
+        self.overrides['explosion_range'] = max(value, 0)
+
+    @property
+    def movement_type(self) -> MovementType:
+        return self.overrides.get("movement_type", self.movement_registry[self.type])
+
+    @movement_type.setter
+    def movement_type(self, value: str):
+        value = Piece.movement_registry.get(value)
+        if value:
+            self.overrides["movement_type"] = value
+
+    @classmethod
+    def get_texture_length(cls) -> int:
+        default_textures = [texture for piece_type in cls.texture_registry.values() for texture in piece_type.values()]
+        custom_textures = [instance.overrides.get("texture") for instance in cls.all_instances if "texture" in instance.overrides]
+        all_textures = default_textures + custom_textures + [cls.default_texture]
+        all_textures = [t for t in all_textures if t is not None]
+        return max(len(texture) for texture in all_textures) if all_textures else 0
+
+    @classmethod
+    def set_class_property(cls, prop_name: str, value, piece_type: str) -> None:
+        if prop_name not in Piece.defaults and prop_name not in ("texture", "movement_type"):
+            print(f"Атрибут {prop_name} не существует")
+            return
+
+        try:
+            if prop_name in Piece.defaults and isinstance(value, str):
+                value = cls.convert_to_type(prop_name, value)
+
+            target_cls = cls.piece_registry.get(piece_type)
+            if not target_cls:
+                print(f"Класс {piece_type} не существует")
+                return
+
+            if prop_name == "texture":
+                for color in target_cls.texture_registry[target_cls.type]:
+                    target_cls.texture_registry[target_cls.type][color] = value
+            elif prop_name == "movement_type":
+                movement = cls.movement_registry.get(value)
+                if not movement:
+                    print(f"Тип движения {value} не существует")
+                    return
+                Piece.movement_registry[target_cls.type] = movement
+            elif prop_name in cls.defaults and prop_name != 'color':
+                target_cls.defaults[prop_name] = value
+
+            for instance in target_cls.instances:
+                if prop_name not in instance.overrides or prop_name == 'color':
+                    if prop_name == "texture":
+                        instance.texture = value
+                    elif prop_name == "movement_type":
+                        instance.movement_type = value
+                    else:
+                        setattr(instance, prop_name, value)
+
+            print(f"Свойство {prop_name} изменено (класс)")
+        except (TypeError, ValueError):
+            print(f"Не удалось изменить свойство {prop_name}")
+
+    def set_property(self, prop_name: str, value) -> None:
+        if prop_name not in self.defaults and prop_name not in ("texture", "movement_type"):
+            print(f"Атрибут {prop_name} не существует")
+            return
+
+        try:
+            if prop_name in self.defaults and isinstance(value, str):
+                value = self.convert_to_type(prop_name, value)
+
+            if prop_name == "movement_type":
+                self.movement_type = value
+            else:
+                self.__setattr__(prop_name, value)
+            print(f"Свойство {prop_name} изменено (фигура)")
+
+        except (TypeError, ValueError):
+            print(f"Не удалось изменить свойство {prop_name}")
+
+    def check_move(self, board: list, x: int, y: int, target_x: int, target_y: int) -> bool:
+        return self.movement_type.validate(self, board, x, y, target_x, target_y)
+
+    @classmethod
+    def convert_to_type(cls, prop_name: str, value):
+        expected_type = type(cls.defaults[prop_name])
+
+        if isinstance(value, expected_type):
+            return value
+
+        if isinstance(value, str):
+            try:
+                if expected_type == bool:
+                    lower_val = value.lower()
+                    if lower_val in ("true", "yes", "1"):
+                        return True
+                    elif lower_val in ("false", "no", "0"):
+                        return False
+                    else:
+                        raise ValueError(f"Неправильное значение: '{value}'")
+                else:
+                    return expected_type(value)
+            except Exception as e:
+                raise TypeError(
+                    f"Не получилось перевести '{value}' в "
+                    f"{expected_type.__name__} для {prop_name}! ({e})"
+                )
+        else:
+            raise TypeError(
+                f"{prop_name} ожидает "
+                f"{expected_type.__name__}, а не {type(value).__name__}!"
+            )
+
+
+class Empty(Piece):
+    type = 'empty'
 
 
 class Pawn(Piece):
-    type = 1
-    rang = 2
+    type = 'pawn'
+    defaults = {
+        'range': 2,
+    }
 
-    def check_move(self, board, x, y, target_x, target_y) -> bool:
-        if self.color == 0 and target_y <= y:  # цель спереди или ссзади пешки
-            return False
-        elif self.color == 1 and target_y >= y:
-            return False
-
-        res = check_collision(board, x, y, target_x, target_y, self.rang, self.can_jump)
-        if res == 0:
-            return False
-        target_color = board[target_y][target_y].get_color()
-
-        if target_x == x and (res == 1 or res == 2 and self.can_eat_own):  # ход в пределах одного столбца
-            return True
-        elif (res == 2 and abs(target_y - y) == 1 and abs(target_x - x) == 1 and  # ход по-диагонали
-              (self.can_eat_own or self.color != target_color)):
-            return True
-        return False
+    def check_move(self, board: list, x: int, y: int, target_x: int, target_y: int) -> bool:
+        res = super().check_move(board, x, y, target_x, target_y)
+        movement = self.overrides.get("movement_type", self.movement_registry[self.type])
+        if movement == PawnMovement and res == 1:
+            self.defaults['range'] = 1
+        return res
 
 
 class Rook(Piece):
-    type = 2
-    rang = -1
-
-    def check_move(self, board, x, y, target_x, target_y) -> bool:
-        res = check_collision(board, x, y, target_x, target_y, self.rang, self.can_jump)
-        if res == 0:
-            return False
-        target_color = board[target_y][target_x].get_color()
-        if not self.can_eat_own and res == 2 and self.color == target_color:
-            return False
-
-        if x == target_x or y == target_y:
-            return True
-        return False
+    type = 'rook'
+    defaults = {
+        'range': -1,
+    }
 
 
 class Knight(Piece):
-    type = 3
-    can_jump = True
-    rang = -1
-
-    def check_move(self, board, x, y, target_x, target_y) -> bool:
-        res = check_collision(board, x, y, target_x, target_y, self.rang, self.can_jump)
-        if res == 0:
-            return False
-        target_color = board[target_y][target_x].get_color()
-        if not self.can_eat_own and res == 2 and self.color == target_color:
-            return False
-
-        dx = abs(x - target_x)
-        dy = abs(y - target_y)
-        if (dx == 1 and dy == 2) or (dx == 2 and dy == 1):
-            return True
-        return False
+    type = 'knight'
+    defaults = {
+        'range': -1,
+        'can_jump': True,
+    }
 
 
 class Bishop(Piece):
-    type = 4
-    rang = -1
-
-    def check_move(self, board, x, y, target_x, target_y) -> bool:
-        res = check_collision(board, x, y, target_x, target_y, self.rang, self.can_jump)
-        if res == 0:
-            return False
-        target_color = board[target_y][target_x].get_color()
-        if not self.can_eat_own and res == 2 and self.color == target_color:
-            return False
-
-        dx = abs(x - target_x)
-        dy = abs(y - target_y)
-        if dx == dy:
-            return True
-        return False
+    type = 'bishop'
+    defaults = {
+        'range': -1,
+    }
 
 
 class Queen(Piece):
-    type = 5
-    rang = -1
-
-    def check_move(self, board, x, y, target_x, target_y) -> bool:
-        res = check_collision(board, x, y, target_x, target_y, self.rang, self.can_jump)
-        if res == 0:
-            return False
-        target_color = board[target_y][target_x].get_color()
-        if not self.can_eat_own and res == 2 and self.color == target_color:
-            return False
-        dx = abs(x - target_x)
-        dy = abs(y - target_y)
-        if (x == target_x or y == target_y) or (dx == dy):
-            return True
-        return False
+    type = 'queen'
+    defaults = {
+        'range': -1,
+    }
 
 
 class King(Piece):
-    type = 6
-    rang = 1
-
-    def check_move(self, board, x, y, target_x, target_y) -> bool:
-        res = check_collision(board, x, y, target_x, target_y, self.rang, self.can_jump)
-        if res == 0:
-            return False
-        elif res == 1:
-            return True
-        target_color = board[target_y][target_x].get_color()
-
-        if self.can_eat_own or self.color != target_color:
-            return True
-        return False
+    type = 'king'
+    defaults = {
+        'range': 1,
+    }
 
 
 class Bomb(Piece):
-    type = 7
-    can_eat_own = True
-    can_explode = True
-    rang = 1
-
-    def check_move(self, board, x, y, target_x, target_y) -> bool:
-        res = check_collision(board, x, y, target_x, target_y, self.rang, self.can_jump)
-        target_color = board[target_y][target_x].get_color()
-        if res == 0:
-            return False
-        elif self.can_eat_own or self.color != target_color or res == 1:
-            return True
-        return False
-
+    type = 'bomb'
+    defaults = {
+        'range': 1,
+        'explosion_range': 1,
+        'can_eat_own': True,
+        'can_explode': True
+    }
